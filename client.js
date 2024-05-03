@@ -1,6 +1,6 @@
 const API_BASE_URL = "https://dxtrade.ftmo.com/api";
-const BUY = 0;  
-const SELL = 1; 
+const BUY = 0;
+const SELL = 1;
 class Identity {
     constructor(username, password, vendor, accountId) {
         this.username = username;
@@ -29,13 +29,13 @@ class Identity {
     }
 
     async login() {
-        const url = `${API_BASE_URL}/auth/login`;
+        const url = `https://dxtrade.ftmo.com/api/auth/login`;
         const payload = JSON.stringify({
+            vendor: this.vendor,
             username: this.username,
             password: this.password,
-            vendor: this.vendor,
         });
-    
+
         const response = await fetch(url, {
             method: 'POST',
             headers: {
@@ -63,10 +63,10 @@ class Identity {
         });
     }
 
-    async executeOrder(method, quantity, price, takeProfit, stopLoss, symbol, instrumentId) {
+    async executeOrder(method, quantity, symbol, instrumentId) {
         const url = `${API_BASE_URL}/orders/single`;
         let orderSide = method === BUY ? 'BUY' : 'SELL';
-        let orderType = price === -1 ? 'MARKET' : 'LIMIT';
+        let orderType = 'MARKET';
 
         const payload = JSON.stringify({
             directExchange: false,
@@ -76,7 +76,7 @@ class Identity {
                 ratioQuantity: 1,
                 symbol
             }],
-            limitPrice: price !== -1 ? price : 0,
+            limitPrice: 0,
             orderSide,
             orderType,
             quantity,
@@ -100,6 +100,77 @@ class Identity {
             console.error('Failed to execute order:', response.status);
         }
     }
+    async closePosition(positionId, quantity, price, symbol, instrumentId) {
+        const url = `${API_BASE_URL}/positions/close`;
+        const payload = JSON.stringify({
+            legs: [{
+                instrumentId: instrumentId,
+                positionCode: positionId,
+                positionEffect: 'CLOSING',
+                ratioQuantity: 1,
+                symbol: symbol
+            }],
+            limitPrice: 0,
+            orderType: 'MARKET',
+            quantity: -quantity,
+            timeInForce: 'GTC'
+        });
+
+        const response = await fetch(url, {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json; charset=UTF-8',
+                'X-CSRF-Token': this.csrf,
+                'X-Requested-With': 'XMLHttpRequest'
+            },
+            body: payload
+        });
+
+        if (response.ok) {
+            console.log('Position closed successfully');
+        } else {
+            console.error('Failed to close position:', response.status, await response.text());
+        }
+    }
+    async getPositions() {
+        var content = await this.linkWs("POSITIONS");
+        console.log(content)
+        return JSON.parse(content.toString().split('|')[1]);
+
+    }
+    async closeAllPositions() {
+        var positions = await this.getPositions();
+        for (var i = 0; i < positions.body.length; i++) {
+            await identity.closePosition(positions.body[i].positionKey.positionCode, positions.body[i].quantity, 0, "US30.cash", positions.body[i].positionKey.instrumentId);
+        }
+    }
+    linkWs(killMsg) {
+        return new Promise((resolve, reject) => {
+            const url = `wss://dxtrade.${this.vendor}.com/client/connector?X-Atmosphere-tracking-id=0&X-Atmosphere-Framework=2.3.2-javascript&X-Atmosphere-Transport=websocket&X-Atmosphere-TrackMessageSize=true&Content-Type=text/x-gwt-rpc;%20charset=UTF-8&X-atmo-protocol=true&sessionState=dx-new&guest-mode=false`; // WebSocket URL, adjust as necessary
+            const ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                console.log("WebSocket connection established.");
+            };
+
+            ws.onerror = (error) => {
+                console.error("WebSocket error:", error);
+                reject(error);
+            };
+
+            ws.onmessage = (event) => {
+                if (event.data.includes(killMsg)) {
+                    ws.close();
+                    resolve(event.data);
+                }
+            };
+
+            ws.onclose = () => {
+                console.log("WebSocket connection closed.");
+                resolve(null);
+            };
+        });
+    }
 
     uuidV4() {
         return ([1e7]+-1e3+-4e3+-8e3+-1e11).replace(/[018]/g, c =>
@@ -110,8 +181,10 @@ class Identity {
 
 const identity = new Identity('','','');
 (async () => {
-    await identity.fetchCSRF()
     await identity.login();
-    await identity.executeOrder(BUY, 0.01, -1, 2.1, 0.4, 'EURUSD', 3438);
+    await identity.fetchCSRF();
+    await identity.executeOrder(BUY, 0.01, 'EURUSD', 3438);
     console.log(identity.csrf);
+   await identity.closeAllPositions();
+
 })();
